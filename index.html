@@ -107,7 +107,6 @@
   .member-count { font-size: 11px; color: var(--text-tertiary); }
 
   .info-bar { margin-top: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: var(--radius); font-size: 12px; color: var(--text-tertiary); line-height: 1.6; }
-
   .empty-state { text-align: center; padding: 3rem 1rem; color: var(--text-tertiary); font-size: 14px; }
 
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
@@ -130,9 +129,10 @@
   .setup-screen .step { margin-bottom: 12px; padding: 12px 14px; background: var(--bg-secondary); border-radius: var(--radius); }
   .setup-screen .step-num { font-size: 11px; font-weight: 500; color: #378ADD; margin-bottom: 3px; }
   .setup-screen .step-text { font-size: 13px; line-height: 1.6; color: var(--text-primary); }
-  .setup-screen a { color: #378ADD; text-decoration: none; }
-  .setup-screen a:hover { text-decoration: underline; }
   .setup-error { margin-top: 8px; font-size: 12px; color: #A32D2D; display: none; }
+
+  .member-edit-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .member-edit-row input { flex: 1; font-size: 14px; }
 
   @media (max-width: 768px) {
     .kanban { grid-template-columns: 1fr; }
@@ -142,343 +142,325 @@
 </style>
 </head>
 <body>
-
 <div id="app"></div>
-
 <script>
 const STORAGE_KEY = 'taskboard-firebase-config';
 let db = null;
-
 function loadConfig() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { return null; } }
 function saveConfig(cfg) { localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg)); }
 
-const MEMBERS = [
-  { id: "m1", name: "田中", color: "#1D9E75", initials: "田" },
-  { id: "m2", name: "佐藤", color: "#378ADD", initials: "佐" },
-  { id: "m3", name: "鈴木", color: "#D85A30", initials: "鈴" },
-  { id: "m4", name: "山田", color: "#D4537E", initials: "山" },
-  { id: "m5", name: "高橋", color: "#7F77DD", initials: "高" },
+const MEMBER_COLORS = ["#1D9E75","#378ADD","#D85A30","#D4537E","#7F77DD","#BA7517","#639922","#A32D2D","#534AB7","#888780"];
+const DEFAULT_MEMBERS = [
+  { id: "m1", name: "メンバー1", color: "#1D9E75" },
+  { id: "m2", name: "メンバー2", color: "#378ADD" },
+  { id: "m3", name: "メンバー3", color: "#D85A30" },
+  { id: "m4", name: "メンバー4", color: "#D4537E" },
+  { id: "m5", name: "メンバー5", color: "#7F77DD" },
 ];
+function getInitial(name) { return name ? name.charAt(0) : '?'; }
 
-const PRIORITY_MAP = { high: { label: "高", cls: "high" }, medium: { label: "中", cls: "medium" }, low: { label: "低", cls: "low" } };
+const PRIORITY_MAP = { high:{label:"高",cls:"high"}, medium:{label:"中",cls:"medium"}, low:{label:"低",cls:"low"} };
 const COLUMNS = [
-  { id: "todo", label: "未着手", icon: "○", accent: "#B4B2A9" },
-  { id: "in_progress", label: "進行中", icon: "◐", accent: "#378ADD" },
-  { id: "review", label: "レビュー", icon: "◉", accent: "#BA7517" },
-  { id: "done", label: "完了", icon: "●", accent: "#1D9E75" },
+  { id:"todo", label:"未着手", icon:"○", accent:"#B4B2A9" },
+  { id:"in_progress", label:"進行中", icon:"◐", accent:"#378ADD" },
+  { id:"review", label:"レビュー", icon:"◉", accent:"#BA7517" },
+  { id:"done", label:"完了", icon:"●", accent:"#1D9E75" },
 ];
+const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const formatDate = d => { if(!d)return""; const dt=new Date(d); return `${dt.getMonth()+1}/${dt.getDate()}`; };
+const isOverdue = d => d ? new Date(d)<new Date(new Date().toDateString()) : false;
 
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const formatDate = (d) => { if (!d) return ""; const dt = new Date(d); return `${dt.getMonth()+1}/${dt.getDate()}`; };
-const isOverdue = (d) => d ? new Date(d) < new Date(new Date().toDateString()) : false;
-
-function sampleTasks() {
+function sampleTasks(members) {
+  const m=members||DEFAULT_MEMBERS;
   return [
-    { id: uid(), title: "Q2レポート作成", desc: "四半期レポートのドラフトを作成する", status: "todo", priority: "high", assignee: "m1", deadline: "2026-03-28", created: Date.now() },
-    { id: uid(), title: "デザインレビュー", desc: "新UIのモックアップを確認", status: "in_progress", priority: "medium", assignee: "m2", deadline: "2026-03-25", created: Date.now() },
-    { id: uid(), title: "API仕様書更新", desc: "v2エンドポイントの仕様を追記", status: "review", priority: "medium", assignee: "m3", deadline: "2026-03-24", created: Date.now() },
-    { id: uid(), title: "テスト環境構築", desc: "CI/CDパイプラインの設定", status: "done", priority: "low", assignee: "m4", deadline: "2026-03-20", created: Date.now() },
-    { id: uid(), title: "クライアント打ち合わせ準備", desc: "提案資料とアジェンダの作成", status: "todo", priority: "high", assignee: "m5", deadline: "2026-03-26", created: Date.now() },
+    {id:uid(),title:"Q2レポート作成",desc:"四半期レポートのドラフトを作成する",status:"todo",priority:"high",assignee:m[0]?.id||"",deadline:"2026-03-28",created:Date.now()},
+    {id:uid(),title:"デザインレビュー",desc:"新UIのモックアップを確認",status:"in_progress",priority:"medium",assignee:m[1]?.id||"",deadline:"2026-03-25",created:Date.now()},
+    {id:uid(),title:"API仕様書更新",desc:"v2エンドポイントの仕様を追記",status:"review",priority:"medium",assignee:m[2]?.id||"",deadline:"2026-03-24",created:Date.now()},
+    {id:uid(),title:"テスト環境構築",desc:"CI/CDパイプラインの設定",status:"done",priority:"low",assignee:m[3]?.id||"",deadline:"2026-03-20",created:Date.now()},
+    {id:uid(),title:"クライアント打ち合わせ準備",desc:"提案資料とアジェンダの作成",status:"todo",priority:"high",assignee:m[4]?.id||"",deadline:"2026-03-26",created:Date.now()},
   ];
 }
 
-let state = { tasks: [], view: 'kanban', filterMember: '', search: '', sortBy: 'status', modal: null, syncing: false, lastSync: null, loading: true, screen: 'loading' };
-function setState(patch) { Object.assign(state, patch); render(); }
+const DONE_HIDE_DAYS = 3;
+function isDoneHidden(task) {
+  if(task.status!=='done') return false;
+  if(!task.completedAt) return false;
+  return (Date.now() - task.completedAt) > DONE_HIDE_DAYS * 24*60*60*1000;
+}
+
+let state = {tasks:[],members:DEFAULT_MEMBERS,view:'kanban',filterMember:'',search:'',sortBy:'status',showDone:true,modal:null,syncing:false,lastSync:null,loading:true,screen:'loading'};
+function setState(patch) { Object.assign(state,patch); render(); }
 
 function initFirebase(config) {
   try {
-    if (!firebase.apps.length) firebase.initializeApp(config);
+    if(!firebase.apps.length) firebase.initializeApp(config);
     db = firebase.database();
-    db.ref('tasks').on('value', (snap) => {
+    db.ref('members').on('value', snap => {
       const data = snap.val();
-      if (data) {
-        setState({ tasks: Object.values(data), loading: false, screen: 'app', lastSync: Date.now(), syncing: false });
-      } else {
-        const sample = sampleTasks();
-        const obj = {}; sample.forEach(t => obj[t.id] = t);
-        db.ref('tasks').set(obj);
-        setState({ tasks: sample, loading: false, screen: 'app', lastSync: Date.now() });
-      }
+      if(data) { setState({members:Object.values(data)}); }
+      else { const obj={}; DEFAULT_MEMBERS.forEach(m=>obj[m.id]=m); db.ref('members').set(obj); }
+    });
+    db.ref('tasks').on('value', snap => {
+      const data = snap.val();
+      if(data) { setState({tasks:Object.values(data),loading:false,screen:'app',lastSync:Date.now(),syncing:false}); }
+      else { const s=sampleTasks(state.members); const obj={}; s.forEach(t=>obj[t.id]=t); db.ref('tasks').set(obj); setState({tasks:s,loading:false,screen:'app',lastSync:Date.now()}); }
     });
     return true;
-  } catch (e) { console.error('Firebase error:', e); return false; }
+  } catch(e) { console.error('Firebase error:',e); return false; }
 }
+function saveTasks(tasks) { if(db){const obj={};tasks.forEach(t=>obj[t.id]=t);db.ref('tasks').set(obj);} }
+function saveMembers(members) { if(db){const obj={};members.forEach(m=>obj[m.id]=m);db.ref('members').set(obj);} }
 
-function saveTasks(tasks) {
-  if (db) { const obj = {}; tasks.forEach(t => obj[t.id] = t); db.ref('tasks').set(obj); }
-}
-
-function h(tag, attrs, ...children) {
-  const el = document.createElement(tag);
-  if (attrs) for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === 'className') el.className = v;
-    else el.setAttribute(k, v);
+function h(tag,attrs,...children) {
+  const el=document.createElement(tag);
+  if(attrs)for(const[k,v]of Object.entries(attrs)){
+    if(k==='style'&&typeof v==='object')Object.assign(el.style,v);
+    else if(k.startsWith('on'))el.addEventListener(k.slice(2).toLowerCase(),v);
+    else if(k==='className')el.className=v;
+    else el.setAttribute(k,v);
   }
-  for (const c of children.flat()) { if (c == null || c === false) continue; el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); }
+  for(const c of children.flat()){if(c==null||c===false)continue;el.appendChild(typeof c==='string'?document.createTextNode(c):c);}
   return el;
 }
 
-function avatarEl(member, size = 28) {
-  if (!member) return h('div', { className: 'avatar empty', style: { width: size+'px', height: size+'px', fontSize: (size*0.4)+'px' } }, '?');
-  return h('div', { className: 'avatar', style: { width: size+'px', height: size+'px', fontSize: (size*0.42)+'px', background: member.color } }, member.initials);
+function avatarEl(member,size=28) {
+  if(!member) return h('div',{className:'avatar empty',style:{width:size+'px',height:size+'px',fontSize:(size*0.4)+'px'}},'?');
+  return h('div',{className:'avatar',style:{width:size+'px',height:size+'px',fontSize:(size*0.42)+'px',background:member.color}},getInitial(member.name));
 }
-function priorityEl(p) { const i = PRIORITY_MAP[p]; return i ? h('span', { className: `priority ${i.cls}` }, i.label) : document.createTextNode(''); }
-function deadlineEl(d, s) {
-  if (!d) return document.createTextNode('');
-  const over = isOverdue(d) && s !== 'done';
-  const el = h('span', { className: `deadline ${over?'overdue':''}` });
-  if (over) el.appendChild(h('span', { className: 'overdue-dot' }));
-  el.appendChild(document.createTextNode(formatDate(d)));
-  return el;
-}
+function priorityEl(p){const i=PRIORITY_MAP[p];return i?h('span',{className:`priority ${i.cls}`},i.label):document.createTextNode('');}
+function deadlineEl(d,s){if(!d)return document.createTextNode('');const over=isOverdue(d)&&s!=='done';const el=h('span',{className:`deadline ${over?'overdue':''}`});if(over)el.appendChild(h('span',{className:'overdue-dot'}));el.appendChild(document.createTextNode(formatDate(d)));return el;}
 
-function renderTaskCard(task) {
-  const member = MEMBERS.find(m => m.id === task.assignee);
-  const card = h('div', { className: 'task-card', draggable: 'true', onClick: () => setState({ modal: { mode: 'edit', task } }) },
-    h('div', { className: 'top' }, h('span', { className: 'title' }, task.title), priorityEl(task.priority)),
-    task.desc ? h('div', { className: 'desc' }, task.desc) : null,
-    h('div', { className: 'bottom' }, avatarEl(member, 24), deadlineEl(task.deadline, task.status))
+function renderTaskCard(task){
+  const member=state.members.find(m=>m.id===task.assignee);
+  const card=h('div',{className:'task-card',draggable:'true',onClick:()=>setState({modal:{mode:'edit',task}})},
+    h('div',{className:'top'},h('span',{className:'title'},task.title),priorityEl(task.priority)),
+    task.desc?h('div',{className:'desc'},task.desc):null,
+    h('div',{className:'bottom'},avatarEl(member,24),deadlineEl(task.deadline,task.status))
   );
-  card.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', task.id));
+  card.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',task.id));
   return card;
 }
 
-function renderKanban(tasks) {
-  const grid = h('div', { className: 'kanban' });
-  COLUMNS.forEach(col => {
-    const colTasks = tasks.filter(t => t.status === col.id).sort((a,b) => ({high:0,medium:1,low:2})[a.priority] - ({high:0,medium:1,low:2})[b.priority]);
-    const colEl = h('div', { className: 'column' });
-    colEl.appendChild(h('div', { className: 'col-header', style: { borderBottom: `2px solid ${col.accent}` } },
-      h('span', { className: 'icon' }, col.icon), h('span', { className: 'name' }, col.label), h('span', { className: 'count' }, String(colTasks.length))
-    ));
-    const tc = h('div', { className: 'col-tasks' });
-    colTasks.forEach(t => tc.appendChild(renderTaskCard(t)));
-    colEl.appendChild(tc);
-    colEl.addEventListener('dragover', e => { e.preventDefault(); colEl.classList.add('drag-over'); });
-    colEl.addEventListener('dragleave', () => colEl.classList.remove('drag-over'));
-    colEl.addEventListener('drop', e => { e.preventDefault(); colEl.classList.remove('drag-over'); const tid = e.dataTransfer.getData('text/plain'); saveTasks(state.tasks.map(t => t.id === tid ? {...t, status: col.id} : t)); });
+function renderKanban(tasks){
+  const grid=h('div',{className:'kanban'});
+  COLUMNS.forEach(col=>{
+    const colTasks=tasks.filter(t=>t.status===col.id).sort((a,b)=>({high:0,medium:1,low:2})[a.priority]-({high:0,medium:1,low:2})[b.priority]);
+    const colEl=h('div',{className:'column'});
+    colEl.appendChild(h('div',{className:'col-header',style:{borderBottom:`2px solid ${col.accent}`}},h('span',{className:'icon'},col.icon),h('span',{className:'name'},col.label),h('span',{className:'count'},String(colTasks.length))));
+    const tc=h('div',{className:'col-tasks'});colTasks.forEach(t=>tc.appendChild(renderTaskCard(t)));colEl.appendChild(tc);
+    colEl.addEventListener('dragover',e=>{e.preventDefault();colEl.classList.add('drag-over');});
+    colEl.addEventListener('dragleave',()=>colEl.classList.remove('drag-over'));
+    colEl.addEventListener('drop',e=>{e.preventDefault();colEl.classList.remove('drag-over');const tid=e.dataTransfer.getData('text/plain');saveTasks(state.tasks.map(t=>{if(t.id!==tid)return t;const upd={...t,status:col.id};if(col.id==='done'&&t.status!=='done')upd.completedAt=Date.now();if(col.id!=='done')delete upd.completedAt;return upd;}));});
     grid.appendChild(colEl);
   });
   return grid;
 }
 
-function renderList(tasks) {
-  const container = h('div');
-  const sortBar = h('div', { className: 'list-sort' });
-  [['status','ステータス順'],['priority','優先度順'],['deadline','期限順'],['assignee','担当者順']].forEach(([k,l]) => {
-    sortBar.appendChild(h('button', { className: `sort-btn ${state.sortBy===k?'active':''}`, onClick: () => setState({ sortBy: k }) }, l));
+function renderList(tasks){
+  const container=h('div');
+  const sortBar=h('div',{className:'list-sort'});
+  [['status','ステータス順'],['priority','優先度順'],['deadline','期限順'],['assignee','担当者順']].forEach(([k,l])=>{
+    sortBar.appendChild(h('button',{className:`sort-btn ${state.sortBy===k?'active':''}`,onClick:()=>setState({sortBy:k})},l));
   });
   container.appendChild(sortBar);
-  const sorted = [...tasks].sort((a,b) => {
-    if (state.sortBy==='priority') return ({high:0,medium:1,low:2})[a.priority]-({high:0,medium:1,low:2})[b.priority];
-    if (state.sortBy==='deadline') { if(!a.deadline)return 1; if(!b.deadline)return -1; return new Date(a.deadline)-new Date(b.deadline); }
-    if (state.sortBy==='assignee') return (MEMBERS.find(m=>m.id===a.assignee)?.name||'ん').localeCompare(MEMBERS.find(m=>m.id===b.assignee)?.name||'ん','ja');
-    return ({todo:0,in_progress:1,review:2,done:3})[a.status]-({todo:0,in_progress:1,review:2,done:3})[b.status];
+  const sorted=[...tasks].sort((a,b)=>{
+    if(state.sortBy==='priority')return({high:0,medium:1,low:2})[a.priority]-({high:0,medium:1,low:2})[b.priority];
+    if(state.sortBy==='deadline'){if(!a.deadline)return 1;if(!b.deadline)return -1;return new Date(a.deadline)-new Date(b.deadline);}
+    if(state.sortBy==='assignee')return(state.members.find(m=>m.id===a.assignee)?.name||'ん').localeCompare(state.members.find(m=>m.id===b.assignee)?.name||'ん','ja');
+    return({todo:0,in_progress:1,review:2,done:3})[a.status]-({todo:0,in_progress:1,review:2,done:3})[b.status];
   });
-  const items = h('div', { className: 'list-items' });
-  sorted.forEach(task => {
-    const member = MEMBERS.find(m => m.id === task.assignee);
-    const col = COLUMNS.find(c => c.id === task.status);
-    items.appendChild(h('div', { className: 'list-row', onClick: () => setState({ modal: { mode: 'edit', task } }) },
-      h('span', { className: 'status-icon' }, col?.icon||''), h('span', { className: 'title' }, task.title),
-      priorityEl(task.priority), deadlineEl(task.deadline, task.status), avatarEl(member, 24)
-    ));
+  const items=h('div',{className:'list-items'});
+  sorted.forEach(task=>{
+    const member=state.members.find(m=>m.id===task.assignee);const col=COLUMNS.find(c=>c.id===task.status);
+    items.appendChild(h('div',{className:'list-row',onClick:()=>setState({modal:{mode:'edit',task}})},
+      h('span',{className:'status-icon'},col?.icon||''),h('span',{className:'title'},task.title),
+      priorityEl(task.priority),deadlineEl(task.deadline,task.status),avatarEl(member,24)));
   });
-  container.appendChild(items);
-  return container;
+  container.appendChild(items);return container;
 }
 
-function renderModal() {
-  if (!state.modal) return null;
-  const isEdit = state.modal.mode === 'edit';
-  const task = isEdit ? state.modal.task : { title:'',desc:'',status:'todo',priority:'medium',assignee:'',deadline:'' };
-  const overlay = h('div', { className: 'modal-overlay', onClick: () => setState({ modal: null }) });
-  const modal = h('div', { className: 'modal', onClick: e => e.stopPropagation() });
-  modal.appendChild(h('h2', null, isEdit ? 'タスク編集' : '新規タスク'));
+function renderModal(){
+  if(!state.modal)return null;
+  if(state.modal.mode==='members')return renderMemberModal();
 
-  const titleInput = h('input', { value: task.title, placeholder: 'タスク名を入力...' });
-  const descInput = h('textarea', { rows: '3', placeholder: '詳細を入力...' }); descInput.value = task.desc || '';
-  const statusSel = h('select'); COLUMNS.forEach(c => { const o = h('option', { value: c.id }, `${c.icon} ${c.label}`); if(c.id===task.status)o.selected=true; statusSel.appendChild(o); });
-  const prioSel = h('select'); Object.entries(PRIORITY_MAP).forEach(([k,v]) => { const o = h('option', { value: k }, v.label); if(k===task.priority)o.selected=true; prioSel.appendChild(o); });
-  const assignSel = h('select'); assignSel.appendChild(h('option', { value: '' }, '未割り当て')); MEMBERS.forEach(m => { const o = h('option', { value: m.id }, m.name); if(m.id===task.assignee)o.selected=true; assignSel.appendChild(o); });
-  const deadInput = h('input', { type: 'date', value: task.deadline || '' });
+  const isEdit=state.modal.mode==='edit';
+  const task=isEdit?state.modal.task:{title:'',desc:'',status:'todo',priority:'medium',assignee:'',deadline:''};
+  const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:null})});
+  const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
+  modal.appendChild(h('h2',null,isEdit?'タスク編集':'新規タスク'));
 
-  modal.appendChild(h('div', { className: 'form-group' }, h('label', null, 'タイトル'), titleInput));
-  modal.appendChild(h('div', { className: 'form-group' }, h('label', null, '説明'), descInput));
-  modal.appendChild(h('div', { className: 'form-row' }, h('div', { className: 'form-group' }, h('label', null, 'ステータス'), statusSel), h('div', { className: 'form-group' }, h('label', null, '優先度'), prioSel)));
-  modal.appendChild(h('div', { className: 'form-row' }, h('div', { className: 'form-group' }, h('label', null, '担当者'), assignSel), h('div', { className: 'form-group' }, h('label', null, '期限'), deadInput)));
+  const titleInput=h('input',{value:task.title,placeholder:'タスク名を入力...'});
+  const descInput=h('textarea',{rows:'3',placeholder:'詳細を入力...'});descInput.value=task.desc||'';
+  const statusSel=h('select');COLUMNS.forEach(c=>{const o=h('option',{value:c.id},`${c.icon} ${c.label}`);if(c.id===task.status)o.selected=true;statusSel.appendChild(o);});
+  const prioSel=h('select');Object.entries(PRIORITY_MAP).forEach(([k,v])=>{const o=h('option',{value:k},v.label);if(k===task.priority)o.selected=true;prioSel.appendChild(o);});
+  const assignSel=h('select');assignSel.appendChild(h('option',{value:''},'未割り当て'));
+  state.members.forEach(m=>{const o=h('option',{value:m.id},m.name);if(m.id===task.assignee)o.selected=true;assignSel.appendChild(o);});
+  const deadInput=h('input',{type:'date',value:task.deadline||''});
 
-  const actions = h('div', { className: 'form-actions' });
-  const left = h('div');
-  if (isEdit) left.appendChild(h('button', { className: 'danger', onClick: () => { saveTasks(state.tasks.filter(t=>t.id!==task.id)); setState({ modal: null }); } }, '削除'));
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'タイトル'),titleInput));
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'説明'),descInput));
+  modal.appendChild(h('div',{className:'form-row'},h('div',{className:'form-group'},h('label',null,'ステータス'),statusSel),h('div',{className:'form-group'},h('label',null,'優先度'),prioSel)));
+  modal.appendChild(h('div',{className:'form-row'},h('div',{className:'form-group'},h('label',null,'担当者'),assignSel),h('div',{className:'form-group'},h('label',null,'期限'),deadInput)));
+
+  const actions=h('div',{className:'form-actions'});
+  const left=h('div');
+  if(isEdit)left.appendChild(h('button',{className:'danger',onClick:()=>{saveTasks(state.tasks.filter(t=>t.id!==task.id));setState({modal:null});}},'削除'));
   actions.appendChild(left);
-  const right = h('div', { className: 'form-actions-right' });
-  right.appendChild(h('button', { onClick: () => setState({ modal: null }) }, 'キャンセル'));
-  right.appendChild(h('button', { className: 'primary', onClick: () => {
-    if (!titleInput.value.trim()) return;
-    const form = { title: titleInput.value.trim(), desc: descInput.value, status: statusSel.value, priority: prioSel.value, assignee: assignSel.value, deadline: deadInput.value };
-    const newTasks = isEdit ? state.tasks.map(t => t.id===task.id ? {...t,...form} : t) : [...state.tasks, {...form, id: uid(), created: Date.now()}];
-    saveTasks(newTasks); setState({ modal: null });
-  } }, '保存'));
-  actions.appendChild(right);
-  modal.appendChild(actions);
-  overlay.appendChild(modal);
-  setTimeout(() => titleInput.focus(), 50);
-  return overlay;
+  const right=h('div',{className:'form-actions-right'});
+  right.appendChild(h('button',{onClick:()=>setState({modal:null})},'キャンセル'));
+  right.appendChild(h('button',{className:'primary',onClick:()=>{
+    if(!titleInput.value.trim())return;
+    const form={title:titleInput.value.trim(),desc:descInput.value,status:statusSel.value,priority:prioSel.value,assignee:assignSel.value,deadline:deadInput.value};
+    if(form.status==='done'&&(!isEdit||task.status!=='done'))form.completedAt=Date.now();
+    if(form.status!=='done')form.completedAt=null;
+    const newTasks=isEdit?state.tasks.map(t=>t.id===task.id?{...t,...form}:t):[...state.tasks,{...form,id:uid(),created:Date.now()}];
+    saveTasks(newTasks);setState({modal:null});
+  }},'保存'));
+  actions.appendChild(right);modal.appendChild(actions);overlay.appendChild(modal);
+  setTimeout(()=>titleInput.focus(),50);return overlay;
 }
 
-function renderSetup() {
-  const el = h('div', { className: 'setup-screen' });
-  el.appendChild(h('h1', null, 'タスクボード セットアップ'));
-  el.appendChild(h('p', { className: 'subtitle' }, 'チーム全員がリアルタイムでタスクを共有するために、Firebase Realtime Database の設定が必要です。無料で使えます。'));
+function renderMemberModal(){
+  const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:null})});
+  const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
+  modal.appendChild(h('h2',null,'メンバー管理'));
+  modal.appendChild(h('p',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'16px'}},'名前を変更すると、チーム全員の画面に即座に反映されます。'));
 
-  const steps = [
-    { num: '1', text: 'Firebase Console（console.firebase.google.com）でプロジェクトを作成' },
-    { num: '2', text: '左メニュー「構築」→「Realtime Database」→「データベースを作成」→「テストモードで開始」を選択' },
-    { num: '3', text: '左上の歯車アイコン →「プロジェクトの設定」→「マイアプリ」→ ウェブアプリ（</>アイコン）を追加' },
-    { num: '4', text: '表示された firebaseConfig の中身を下にペースト' },
-  ];
-  steps.forEach(s => el.appendChild(h('div', { className: 'step' }, h('div', { className: 'step-num' }, `Step ${s.num}`), h('div', { className: 'step-text' }, s.text))));
+  const inputRefs=[];
+  state.members.forEach((m,idx)=>{
+    const row=h('div',{className:'member-edit-row'});
+    row.appendChild(avatarEl(m,32));
+    const nameInput=h('input',{value:m.name,placeholder:`メンバー${idx+1}の名前`});
+    inputRefs.push({id:m.id,input:nameInput,color:m.color});
+    row.appendChild(nameInput);
+    if(state.members.length>1){
+      row.appendChild(h('button',{className:'danger',style:{padding:'4px 10px',fontSize:'12px',flexShrink:'0'},onClick:()=>{
+        const newM=state.members.filter(mm=>mm.id!==m.id);saveMembers(newM);
+        // Re-open modal after delete
+        setTimeout(()=>setState({modal:{mode:'members'}}),100);
+      }},'×'));
+    }
+    modal.appendChild(row);
+  });
 
-  const configInput = h('textarea', { rows: '7', placeholder: '{\n  "apiKey": "AIza...",\n  "authDomain": "your-project.firebaseapp.com",\n  "databaseURL": "https://your-project-default-rtdb.firebaseio.com",\n  "projectId": "your-project"\n}', style: { width: '100%', fontFamily: 'monospace', fontSize: '12px', marginTop: '8px' } });
-  el.appendChild(h('div', { className: 'form-group', style: { marginTop: '20px' } }, h('label', null, 'Firebase 設定 JSON'), configInput));
+  if(state.members.length<10){
+    modal.appendChild(h('button',{style:{width:'100%',marginTop:'4px',marginBottom:'8px'},onClick:()=>{
+      const newId='m'+uid();
+      const ci=state.members.length%MEMBER_COLORS.length;
+      const newM=[...state.members,{id:newId,name:'',color:MEMBER_COLORS[ci]}];
+      saveMembers(newM);
+      setTimeout(()=>setState({modal:{mode:'members'}}),100);
+    }},'+ メンバーを追加'));
+  }
 
-  const errorMsg = h('div', { className: 'setup-error' }, '');
+  const actions=h('div',{className:'form-actions'});
+  actions.appendChild(h('div'));
+  const right=h('div',{className:'form-actions-right'});
+  right.appendChild(h('button',{onClick:()=>setState({modal:null})},'キャンセル'));
+  right.appendChild(h('button',{className:'primary',onClick:()=>{
+    const newM=inputRefs.map(r=>({id:r.id,name:r.input.value.trim()||'名前なし',color:r.color}));
+    saveMembers(newM);setState({modal:null});
+  }},'保存'));
+  actions.appendChild(right);modal.appendChild(actions);overlay.appendChild(modal);return overlay;
+}
+
+function renderSetup(){
+  const el=h('div',{className:'setup-screen'});
+  el.appendChild(h('h1',null,'タスクボード セットアップ'));
+  el.appendChild(h('p',{className:'subtitle'},'チーム全員がリアルタイムでタスクを共有するために、Firebase Realtime Database の設定が必要です。無料で使えます。'));
+  [{num:'1',text:'Firebase Console（console.firebase.google.com）でプロジェクトを作成'},{num:'2',text:'左メニュー「Database と Storage」→「Realtime Database」→「データベースを作成」→「テストモードで開始」'},{num:'3',text:'プロジェクトの設定 →「マイアプリ」→ ウェブアプリを追加 → firebaseConfig をコピー'},{num:'4',text:'コピーした設定に databaseURL を追加して下にペースト'}].forEach(s=>el.appendChild(h('div',{className:'step'},h('div',{className:'step-num'},`Step ${s.num}`),h('div',{className:'step-text'},s.text))));
+  const configInput=h('textarea',{rows:'7',placeholder:'{\n  "apiKey": "AIza...",\n  "authDomain": "your-project.firebaseapp.com",\n  "databaseURL": "https://your-project-default-rtdb.firebaseio.com",\n  "projectId": "your-project"\n}',style:{width:'100%',fontFamily:'monospace',fontSize:'12px',marginTop:'8px'}});
+  el.appendChild(h('div',{className:'form-group',style:{marginTop:'20px'}},h('label',null,'Firebase 設定 JSON'),configInput));
+  const errorMsg=h('div',{className:'setup-error'},'');
   el.appendChild(errorMsg);
-
-  el.appendChild(h('button', { className: 'primary', style: { width: '100%', padding: '10px', marginTop: '8px', fontSize: '14px' }, onClick: () => {
-    errorMsg.style.display = 'none';
-    let cfg;
-    try { cfg = JSON.parse(configInput.value); } catch { errorMsg.textContent = 'JSONの形式が正しくありません。'; errorMsg.style.display = 'block'; return; }
-    if (!cfg.databaseURL) { errorMsg.textContent = 'databaseURL が含まれていません。Firebase設定を確認してください。'; errorMsg.style.display = 'block'; return; }
-    saveConfig(cfg);
-    setState({ screen: 'loading' });
-    loadFirebaseSDK(() => {
-      if (!initFirebase(cfg)) {
-        errorMsg.textContent = 'Firebase への接続に失敗しました。設定を確認してください。';
-        errorMsg.style.display = 'block';
-        setState({ screen: 'setup' });
-      }
-    });
-  } }, '接続して開始'));
-
-  el.appendChild(h('p', { style: { fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '16px', lineHeight: '1.6' } },
-    'この設定はブラウザに保存されます。チームメンバーには、このページのURLと同じFirebase設定JSONを共有してください。全員が同じdatabaseURLを使うことでデータが同期されます。'
-  ));
-
+  el.appendChild(h('button',{className:'primary',style:{width:'100%',padding:'10px',marginTop:'8px',fontSize:'14px'},onClick:()=>{
+    errorMsg.style.display='none';let cfg;
+    try{cfg=JSON.parse(configInput.value);}catch{errorMsg.textContent='JSONの形式が正しくありません。';errorMsg.style.display='block';return;}
+    if(!cfg.databaseURL){errorMsg.textContent='databaseURL が含まれていません。Realtime Databaseの画面でURLを確認してください。';errorMsg.style.display='block';return;}
+    saveConfig(cfg);setState({screen:'loading'});
+    loadFirebaseSDK(()=>{if(!initFirebase(cfg)){errorMsg.textContent='接続に失敗しました。設定を確認してください。';errorMsg.style.display='block';setState({screen:'setup'});}});
+  }},'接続して開始'));
+  el.appendChild(h('p',{style:{fontSize:'11px',color:'var(--text-tertiary)',marginTop:'16px',lineHeight:'1.6'}},'この設定はブラウザに保存されます。チームメンバーには、このページのURLと同じFirebase設定JSONを共有してください。'));
   return el;
 }
 
-function render() {
-  const app = document.getElementById('app');
-  app.innerHTML = '';
+function render(){
+  const app=document.getElementById('app');app.innerHTML='';
+  if(state.screen==='setup'){app.appendChild(renderSetup());return;}
+  if(state.screen==='loading'||state.loading){app.appendChild(h('div',{className:'loading'},h('div',{className:'msg'},'Firebaseに接続中...'),h('div',{className:'sub'},'チームのタスクを取得しています')));return;}
 
-  if (state.screen === 'setup') { app.appendChild(renderSetup()); return; }
-  if (state.screen === 'loading' || state.loading) {
-    app.appendChild(h('div', { className: 'loading' }, h('div', { className: 'msg' }, 'Firebaseに接続中...'), h('div', { className: 'sub' }, 'チームのタスクを取得しています')));
-    return;
-  }
-
-  const filtered = state.tasks.filter(t => {
-    if (state.filterMember && t.assignee !== state.filterMember) return false;
-    if (state.search && !t.title.toLowerCase().includes(state.search.toLowerCase()) && !(t.desc||'').toLowerCase().includes(state.search.toLowerCase())) return false;
+  const hiddenDoneCount=state.tasks.filter(t=>isDoneHidden(t)).length;
+  const filtered=state.tasks.filter(t=>{
+    if(state.filterMember&&t.assignee!==state.filterMember)return false;
+    if(state.search&&!t.title.toLowerCase().includes(state.search.toLowerCase())&&!(t.desc||'').toLowerCase().includes(state.search.toLowerCase()))return false;
+    if(!state.showDone&&t.status==='done')return false;
+    if(state.showDone&&isDoneHidden(t))return false;
     return true;
   });
-  const stats = { total: state.tasks.length, done: state.tasks.filter(t=>t.status==='done').length, overdue: state.tasks.filter(t=>isOverdue(t.deadline)&&t.status!=='done').length, inProgress: state.tasks.filter(t=>t.status==='in_progress').length };
+  const stats={total:state.tasks.length,done:state.tasks.filter(t=>t.status==='done').length,overdue:state.tasks.filter(t=>isOverdue(t.deadline)&&t.status!=='done').length,inProgress:state.tasks.filter(t=>t.status==='in_progress').length};
 
-  const container = h('div', { className: 'app' });
+  const container=h('div',{className:'app'});
+  const header=h('div',{className:'header'});
+  const hl=h('div');hl.appendChild(h('h1',null,'タスクボード'));
+  const sub=h('div',{className:'header-sub'});sub.appendChild(h('p',null,'チーム共有タスク管理'));
+  const si=h('div',{className:'sync-info'});si.appendChild(h('span',{className:'sync-dot',style:{background:state.syncing?'#BA7517':'#1D9E75'}}));
+  si.appendChild(document.createTextNode(state.lastSync?`同期済 ${new Date(state.lastSync).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}`:'リアルタイム同期中'));
+  sub.appendChild(si);hl.appendChild(sub);header.appendChild(hl);
+  const headerR=h('div',{style:{display:'flex',gap:'8px'}});
+  headerR.appendChild(h('button',{onClick:()=>{localStorage.removeItem(STORAGE_KEY);location.reload();},style:{fontSize:'11px',color:'var(--text-tertiary)'}},'設定変更'));
+  headerR.appendChild(h('button',{className:'primary',onClick:()=>setState({modal:{mode:'new'}})},'+ 新規タスク'));
+  header.appendChild(headerR);container.appendChild(header);
 
-  // Header
-  const header = h('div', { className: 'header' });
-  const hl = h('div');
-  hl.appendChild(h('h1', null, 'タスクボード'));
-  const sub = h('div', { className: 'header-sub' });
-  sub.appendChild(h('p', null, 'チーム共有タスク管理'));
-  const si = h('div', { className: 'sync-info' });
-  si.appendChild(h('span', { className: 'sync-dot', style: { background: state.syncing ? '#BA7517' : '#1D9E75' } }));
-  si.appendChild(document.createTextNode(state.lastSync ? `同期済 ${new Date(state.lastSync).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}` : 'リアルタイム同期中'));
-  sub.appendChild(si);
-  hl.appendChild(sub);
-  header.appendChild(hl);
-  const hr = h('div', { style: { display: 'flex', gap: '8px' } });
-  hr.appendChild(h('button', { onClick: () => { localStorage.removeItem(STORAGE_KEY); location.reload(); }, style: { fontSize: '11px', color: 'var(--text-tertiary)' } }, '設定変更'));
-  hr.appendChild(h('button', { className: 'primary', onClick: () => setState({ modal: { mode: 'new' } }) }, '+ 新規タスク'));
-  header.appendChild(hr);
-  container.appendChild(header);
-
-  // Stats
-  const sg = h('div', { className: 'stats' });
-  [{l:'合計',v:stats.total,bg:'var(--bg-secondary)'},{l:'進行中',v:stats.inProgress,bg:'#E6F1FB'},{l:'完了',v:stats.done,bg:'#E1F5EE'},{l:'期限超過',v:stats.overdue,bg:stats.overdue>0?'#FCEBEB':'var(--bg-secondary)'}].forEach(s => {
-    sg.appendChild(h('div', { className: 'stat-card', style: { background: s.bg } }, h('div', { className: 'label' }, s.l), h('div', { className: 'value' }, String(s.v))));
+  const sg=h('div',{className:'stats'});
+  [{l:'合計',v:stats.total,bg:'var(--bg-secondary)'},{l:'進行中',v:stats.inProgress,bg:'#E6F1FB'},{l:'完了',v:stats.done,bg:'#E1F5EE'},{l:'期限超過',v:stats.overdue,bg:stats.overdue>0?'#FCEBEB':'var(--bg-secondary)'}].forEach(s=>{
+    sg.appendChild(h('div',{className:'stat-card',style:{background:s.bg}},h('div',{className:'label'},s.l),h('div',{className:'value'},String(s.v))));
   });
   container.appendChild(sg);
 
-  // Toolbar
-  const tb = h('div', { className: 'toolbar' });
-  tb.appendChild(h('input', { placeholder: '検索...', value: state.search, onInput: e => setState({ search: e.target.value }) }));
-  const ms = h('select', { onChange: e => setState({ filterMember: e.target.value }) });
-  ms.appendChild(h('option', { value: '' }, '全メンバー'));
-  MEMBERS.forEach(m => { const o = h('option', { value: m.id }, m.name); if(m.id===state.filterMember)o.selected=true; ms.appendChild(o); });
+  const tb=h('div',{className:'toolbar'});
+  tb.appendChild(h('input',{placeholder:'検索...',value:state.search,onInput:e=>setState({search:e.target.value})}));
+  const ms=h('select',{onChange:e=>setState({filterMember:e.target.value})});ms.appendChild(h('option',{value:''},'全メンバー'));
+  state.members.forEach(m=>{const o=h('option',{value:m.id},m.name);if(m.id===state.filterMember)o.selected=true;ms.appendChild(o);});
   tb.appendChild(ms);
-  const vt = h('div', { className: 'view-toggle' });
-  [['kanban','ボード'],['list','リスト']].forEach(([k,l]) => vt.appendChild(h('button', { className: `view-btn ${state.view===k?'active':''}`, onClick: () => setState({ view: k }) }, l)));
-  tb.appendChild(vt);
-  container.appendChild(tb);
+  const doneToggle=h('button',{style:{fontSize:'12px',padding:'5px 12px',background:state.showDone?'transparent':'var(--bg-tertiary)',color:state.showDone?'var(--text-secondary)':'var(--text-primary)'},onClick:()=>setState({showDone:!state.showDone})},state.showDone?'● 完了を非表示':'○ 完了を表示');
+  tb.appendChild(doneToggle);
+  if(hiddenDoneCount>0){tb.appendChild(h('span',{style:{fontSize:'11px',color:'var(--text-tertiary)'}},`(${hiddenDoneCount}件 3日超で自動非表示)`));}
+  const vt=h('div',{className:'view-toggle'});
+  [['kanban','ボード'],['list','リスト']].forEach(([k,l])=>vt.appendChild(h('button',{className:`view-btn ${state.view===k?'active':''}`,onClick:()=>setState({view:k})},l)));
+  tb.appendChild(vt);container.appendChild(tb);
 
-  container.appendChild(state.view === 'kanban' ? renderKanban(filtered) : renderList(filtered));
-  if (filtered.length === 0) container.appendChild(h('div', { className: 'empty-state' }, 'タスクが見つかりません'));
+  container.appendChild(state.view==='kanban'?renderKanban(filtered):renderList(filtered));
+  if(filtered.length===0)container.appendChild(h('div',{className:'empty-state'},'タスクが見つかりません'));
 
-  // Members
-  const ms2 = h('div', { className: 'members-section' });
-  const mt = h('div', { className: 'section-title' });
-  mt.appendChild(document.createTextNode('メンバー'));
-  mt.appendChild(h('button', { style: { fontSize: '11px', padding: '3px 10px' }, onClick: () => saveTasks(sampleTasks()) }, 'リセット'));
-  ms2.appendChild(mt);
-  const mg = h('div', { className: 'members-grid' });
-  MEMBERS.forEach(m => {
-    const c = state.tasks.filter(t => t.assignee === m.id && t.status !== 'done').length;
-    mg.appendChild(h('div', { className: `member-item ${state.filterMember && state.filterMember !== m.id ? 'faded' : ''}`, onClick: () => setState({ filterMember: state.filterMember === m.id ? '' : m.id }) },
-      avatarEl(m, 28), h('div', null, h('div', { className: 'member-name' }, m.name), h('div', { className: 'member-count' }, `${c}件 進行中`))
-    ));
+  const ms2=h('div',{className:'members-section'});
+  const mt=h('div',{className:'section-title'});mt.appendChild(document.createTextNode('メンバー'));
+  const mtBtns=h('div',{style:{display:'flex',gap:'6px'}});
+  mtBtns.appendChild(h('button',{style:{fontSize:'11px',padding:'3px 10px'},onClick:()=>setState({modal:{mode:'members'}})},'編集'));
+  mtBtns.appendChild(h('button',{style:{fontSize:'11px',padding:'3px 10px'},onClick:()=>saveTasks(sampleTasks(state.members))},'タスクリセット'));
+  mt.appendChild(mtBtns);ms2.appendChild(mt);
+  const mg=h('div',{className:'members-grid'});
+  state.members.forEach(m=>{
+    const c=state.tasks.filter(t=>t.assignee===m.id&&t.status!=='done').length;
+    mg.appendChild(h('div',{className:`member-item ${state.filterMember&&state.filterMember!==m.id?'faded':''}`,onClick:()=>setState({filterMember:state.filterMember===m.id?'':m.id})},
+      avatarEl(m,28),h('div',null,h('div',{className:'member-name'},m.name),h('div',{className:'member-count'},`${c}件 進行中`))));
   });
-  ms2.appendChild(mg);
-  container.appendChild(ms2);
+  ms2.appendChild(mg);container.appendChild(ms2);
 
-  container.appendChild(h('div', { className: 'info-bar' }, 'リアルタイム共有モード: Firebaseでチームメンバーと自動同期中です。誰かがタスクを変更すると即座に反映されます。'));
+  container.appendChild(h('div',{className:'info-bar'},'リアルタイム共有モード: Firebaseでチームメンバーと自動同期中です。タスクやメンバー名の変更は即座に全員に反映されます。'));
   app.appendChild(container);
-
-  const modalEl = renderModal();
-  if (modalEl) app.appendChild(modalEl);
+  const modalEl=renderModal();if(modalEl)app.appendChild(modalEl);
 }
 
-function loadFirebaseSDK(callback) {
-  if (typeof firebase !== 'undefined') { callback(); return; }
-  const s1 = document.createElement('script');
-  s1.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
-  s1.onload = () => {
-    const s2 = document.createElement('script');
-    s2.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js';
-    s2.onload = callback;
-    document.head.appendChild(s2);
-  };
+function loadFirebaseSDK(callback){
+  if(typeof firebase!=='undefined'){callback();return;}
+  const s1=document.createElement('script');s1.src='https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
+  s1.onload=()=>{const s2=document.createElement('script');s2.src='https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js';s2.onload=callback;document.head.appendChild(s2);};
   document.head.appendChild(s1);
 }
 
-// Init
-const savedConfig = loadConfig();
-if (savedConfig) {
-  state.screen = 'loading';
-  render();
-  loadFirebaseSDK(() => {
-    if (!initFirebase(savedConfig)) { localStorage.removeItem(STORAGE_KEY); setState({ screen: 'setup', loading: false }); }
-  });
-} else {
-  state.screen = 'setup';
-  state.loading = false;
-  render();
-}
+const savedConfig=loadConfig();
+if(savedConfig){state.screen='loading';render();loadFirebaseSDK(()=>{if(!initFirebase(savedConfig)){localStorage.removeItem(STORAGE_KEY);setState({screen:'setup',loading:false});}});}
+else{state.screen='setup';state.loading=false;render();}
 </script>
 </body>
 </html>

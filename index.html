@@ -134,6 +134,17 @@
   .member-edit-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .member-edit-row input { flex: 1; font-size: 14px; }
 
+  .avatar-stack { display: flex; flex-shrink: 0; }
+  .avatar-stack .avatar { margin-left: -6px; border: 2px solid var(--bg-primary); }
+  .avatar-stack .avatar:first-child { margin-left: 0; }
+
+  .assignee-grid { display: flex; flex-direction: column; gap: 6px; }
+  .assignee-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; transition: background 0.1s; user-select: none; }
+  .assignee-option:hover { background: var(--bg-secondary); }
+  .assignee-option.selected { background: var(--bg-tertiary); }
+  .assignee-check { width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--border-hover); display: flex; align-items: center; justify-content: center; font-size: 12px; color: transparent; flex-shrink: 0; transition: all 0.15s; }
+  .assignee-option.selected .assignee-check { background: var(--text-primary); color: var(--bg-primary); border-color: var(--text-primary); }
+
   @media (max-width: 768px) {
     .kanban { grid-template-columns: 1fr; }
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -158,6 +169,16 @@ const DEFAULT_MEMBERS = [
   { id: "m5", name: "メンバー5", color: "#7F77DD" },
 ];
 function getInitial(name) { return name ? name.charAt(0) : '?'; }
+
+// Backward-compatible: old tasks have assignee (string), new tasks have assignees (array)
+function getAssignees(task) {
+  if(task.assignees && Array.isArray(task.assignees)) return task.assignees.filter(Boolean);
+  if(task.assignee) return [task.assignee];
+  return [];
+}
+function taskHasAssignee(task, memberId) {
+  return getAssignees(task).includes(memberId);
+}
 
 const PRIORITY_MAP = { high:{label:"高",cls:"high"}, medium:{label:"中",cls:"medium"}, low:{label:"低",cls:"low"} };
 const COLUMNS = [
@@ -230,12 +251,20 @@ function avatarEl(member,size=28) {
 function priorityEl(p){const i=PRIORITY_MAP[p];return i?h('span',{className:`priority ${i.cls}`},i.label):document.createTextNode('');}
 function deadlineEl(d,s){if(!d)return document.createTextNode('');const over=isOverdue(d)&&s!=='done';const el=h('span',{className:`deadline ${over?'overdue':''}`});if(over)el.appendChild(h('span',{className:'overdue-dot'}));el.appendChild(document.createTextNode(formatDate(d)));return el;}
 
+function avatarStackEl(task, size=24) {
+  const ids = getAssignees(task);
+  if(ids.length===0) return avatarEl(null, size);
+  if(ids.length===1) { const m=state.members.find(mm=>mm.id===ids[0]); return avatarEl(m, size); }
+  const stack = h('div',{className:'avatar-stack'});
+  ids.forEach(id => { const m=state.members.find(mm=>mm.id===id); stack.appendChild(avatarEl(m, size)); });
+  return stack;
+}
+
 function renderTaskCard(task){
-  const member=state.members.find(m=>m.id===task.assignee);
   const card=h('div',{className:'task-card',draggable:'true',onClick:()=>setState({modal:{mode:'edit',task}})},
     h('div',{className:'top'},h('span',{className:'title'},task.title),priorityEl(task.priority)),
     task.desc?h('div',{className:'desc'},task.desc):null,
-    h('div',{className:'bottom'},avatarEl(member,24),deadlineEl(task.deadline,task.status))
+    h('div',{className:'bottom'},avatarStackEl(task,24),deadlineEl(task.deadline,task.status))
   );
   card.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',task.id));
   return card;
@@ -266,15 +295,15 @@ function renderList(tasks){
   const sorted=[...tasks].sort((a,b)=>{
     if(state.sortBy==='priority')return({high:0,medium:1,low:2})[a.priority]-({high:0,medium:1,low:2})[b.priority];
     if(state.sortBy==='deadline'){if(!a.deadline)return 1;if(!b.deadline)return -1;return new Date(a.deadline)-new Date(b.deadline);}
-    if(state.sortBy==='assignee')return(state.members.find(m=>m.id===a.assignee)?.name||'ん').localeCompare(state.members.find(m=>m.id===b.assignee)?.name||'ん','ja');
+    if(state.sortBy==='assignee')return(state.members.find(m=>m.id===getAssignees(a)[0])?.name||'ん').localeCompare(state.members.find(m=>m.id===getAssignees(b)[0])?.name||'ん','ja');
     return({todo:0,in_progress:1,review:2,done:3})[a.status]-({todo:0,in_progress:1,review:2,done:3})[b.status];
   });
   const items=h('div',{className:'list-items'});
   sorted.forEach(task=>{
-    const member=state.members.find(m=>m.id===task.assignee);const col=COLUMNS.find(c=>c.id===task.status);
+    const col=COLUMNS.find(c=>c.id===task.status);
     items.appendChild(h('div',{className:'list-row',onClick:()=>setState({modal:{mode:'edit',task}})},
       h('span',{className:'status-icon'},col?.icon||''),h('span',{className:'title'},task.title),
-      priorityEl(task.priority),deadlineEl(task.deadline,task.status),avatarEl(member,24)));
+      priorityEl(task.priority),deadlineEl(task.deadline,task.status),avatarStackEl(task,24)));
   });
   container.appendChild(items);return container;
 }
@@ -284,7 +313,8 @@ function renderModal(){
   if(state.modal.mode==='members')return renderMemberModal();
 
   const isEdit=state.modal.mode==='edit';
-  const task=isEdit?state.modal.task:{title:'',desc:'',status:'todo',priority:'medium',assignee:'',deadline:''};
+  const task=isEdit?state.modal.task:{title:'',desc:'',status:'todo',priority:'medium',assignees:[],deadline:''};
+  const currentAssignees = getAssignees(task);
   const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:null})});
   const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
   modal.appendChild(h('h2',null,isEdit?'タスク編集':'新規タスク'));
@@ -293,14 +323,30 @@ function renderModal(){
   const descInput=h('textarea',{rows:'3',placeholder:'詳細を入力...'});descInput.value=task.desc||'';
   const statusSel=h('select');COLUMNS.forEach(c=>{const o=h('option',{value:c.id},`${c.icon} ${c.label}`);if(c.id===task.status)o.selected=true;statusSel.appendChild(o);});
   const prioSel=h('select');Object.entries(PRIORITY_MAP).forEach(([k,v])=>{const o=h('option',{value:k},v.label);if(k===task.priority)o.selected=true;prioSel.appendChild(o);});
-  const assignSel=h('select');assignSel.appendChild(h('option',{value:''},'未割り当て'));
-  state.members.forEach(m=>{const o=h('option',{value:m.id},m.name);if(m.id===task.assignee)o.selected=true;assignSel.appendChild(o);});
   const deadInput=h('input',{type:'date',value:task.deadline||''});
+
+  // Multi-select assignees
+  const selectedAssignees = new Set(currentAssignees);
+  const assigneeContainer = h('div',{className:'assignee-grid'});
+  state.members.forEach(m => {
+    const isSelected = selectedAssignees.has(m.id);
+    const option = h('div',{className:`assignee-option ${isSelected?'selected':''}`,onClick:()=>{
+      if(selectedAssignees.has(m.id)) selectedAssignees.delete(m.id);
+      else selectedAssignees.add(m.id);
+      option.classList.toggle('selected');
+      option.querySelector('.assignee-check').textContent = selectedAssignees.has(m.id) ? '✓' : '';
+    }},
+      h('div',{className:'assignee-check'},isSelected?'✓':''),
+      avatarEl(m,24),
+      h('span',{style:{fontSize:'13px'}},m.name)
+    );
+    assigneeContainer.appendChild(option);
+  });
 
   modal.appendChild(h('div',{className:'form-group'},h('label',null,'タイトル'),titleInput));
   modal.appendChild(h('div',{className:'form-group'},h('label',null,'説明'),descInput));
   modal.appendChild(h('div',{className:'form-row'},h('div',{className:'form-group'},h('label',null,'ステータス'),statusSel),h('div',{className:'form-group'},h('label',null,'優先度'),prioSel)));
-  modal.appendChild(h('div',{className:'form-row'},h('div',{className:'form-group'},h('label',null,'担当者'),assignSel),h('div',{className:'form-group'},h('label',null,'期限'),deadInput)));
+  modal.appendChild(h('div',{className:'form-row'},h('div',{className:'form-group'},h('label',null,'担当者（複数選択可）'),assigneeContainer),h('div',{className:'form-group'},h('label',null,'期限'),deadInput)));
 
   const actions=h('div',{className:'form-actions'});
   const left=h('div');
@@ -310,10 +356,11 @@ function renderModal(){
   right.appendChild(h('button',{onClick:()=>setState({modal:null})},'キャンセル'));
   right.appendChild(h('button',{className:'primary',onClick:()=>{
     if(!titleInput.value.trim())return;
-    const form={title:titleInput.value.trim(),desc:descInput.value,status:statusSel.value,priority:prioSel.value,assignee:assignSel.value,deadline:deadInput.value};
+    const form={title:titleInput.value.trim(),desc:descInput.value,status:statusSel.value,priority:prioSel.value,assignees:Array.from(selectedAssignees),deadline:deadInput.value};
+    // Remove old single assignee field
     if(form.status==='done'&&(!isEdit||task.status!=='done'))form.completedAt=Date.now();
     if(form.status!=='done')form.completedAt=null;
-    const newTasks=isEdit?state.tasks.map(t=>t.id===task.id?{...t,...form}:t):[...state.tasks,{...form,id:uid(),created:Date.now()}];
+    const newTasks=isEdit?state.tasks.map(t=>t.id===task.id?{...t,...form,assignee:null}:t):[...state.tasks,{...form,id:uid(),created:Date.now()}];
     saveTasks(newTasks);setState({modal:null});
   }},'保存'));
   actions.appendChild(right);modal.appendChild(actions);overlay.appendChild(modal);
@@ -391,7 +438,7 @@ function render(){
 
   const hiddenDoneCount=state.tasks.filter(t=>isDoneHidden(t)).length;
   const filtered=state.tasks.filter(t=>{
-    if(state.filterMember&&t.assignee!==state.filterMember)return false;
+    if(state.filterMember&&!taskHasAssignee(t,state.filterMember))return false;
     if(state.search&&!t.title.toLowerCase().includes(state.search.toLowerCase())&&!(t.desc||'').toLowerCase().includes(state.search.toLowerCase()))return false;
     if(!state.showDone&&t.status==='done')return false;
     if(state.showDone&&isDoneHidden(t))return false;
@@ -440,7 +487,7 @@ function render(){
   mt.appendChild(mtBtns);ms2.appendChild(mt);
   const mg=h('div',{className:'members-grid'});
   state.members.forEach(m=>{
-    const c=state.tasks.filter(t=>t.assignee===m.id&&t.status!=='done').length;
+    const c=state.tasks.filter(t=>taskHasAssignee(t,m.id)&&t.status!=='done').length;
     mg.appendChild(h('div',{className:`member-item ${state.filterMember&&state.filterMember!==m.id?'faded':''}`,onClick:()=>setState({filterMember:state.filterMember===m.id?'':m.id})},
       avatarEl(m,28),h('div',null,h('div',{className:'member-name'},m.name),h('div',{className:'member-count'},`${c}件 進行中`))));
   });

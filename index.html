@@ -145,6 +145,15 @@
   .assignee-check { width: 18px; height: 18px; border-radius: 4px; border: 1.5px solid var(--border-hover); display: flex; align-items: center; justify-content: center; font-size: 12px; color: transparent; flex-shrink: 0; transition: all 0.15s; }
   .assignee-option.selected .assignee-check { background: var(--text-primary); color: var(--bg-primary); border-color: var(--text-primary); }
 
+  .routine-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-secondary); border-radius: var(--radius); margin-bottom: 8px; }
+  .routine-item .routine-info { flex: 1; min-width: 0; }
+  .routine-item .routine-title { font-size: 14px; font-weight: 500; }
+  .routine-item .routine-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+  .routine-item .routine-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .routine-section { margin-top: 16px; padding: 14px 16px; background: var(--bg-secondary); border-radius: var(--radius); }
+  .routine-section .section-title { font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .routine-badge { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #E6F1FB; color: #378ADD; border: 1px solid #B8D9F8; font-weight: 500; }
+
   @media (max-width: 768px) {
     .kanban { grid-template-columns: 1fr; }
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -209,8 +218,54 @@ function isDoneHidden(task) {
   return (Date.now() - task.completedAt) > DONE_HIDE_DAYS * 24*60*60*1000;
 }
 
-let state = {tasks:[],members:DEFAULT_MEMBERS,view:'kanban',filterMember:'',search:'',sortBy:'status',showDone:true,modal:null,syncing:false,lastSync:null,loading:true,screen:'loading'};
+let state = {tasks:[],members:DEFAULT_MEMBERS,routines:[],view:'kanban',filterMember:'',search:'',sortBy:'status',showDone:true,modal:null,syncing:false,lastSync:null,loading:true,screen:'loading'};
 function setState(patch) { Object.assign(state,patch); render(); }
+
+// Routine auto-generation: check if this month's tasks have been created
+function checkAndGenerateRoutines() {
+  if(!db || state.routines.length===0) return;
+  const now = new Date();
+  const yearMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  let newTasks = [...state.tasks];
+  let created = false;
+
+  state.routines.forEach(routine => {
+    // Check if a task from this routine already exists for this month
+    const alreadyExists = newTasks.some(t => t.routineId === routine.id && t.routineMonth === yearMonth);
+    if(alreadyExists) return;
+
+    // Check if today >= the routine's day of month
+    const day = routine.dayOfMonth || 1;
+    if(now.getDate() < day) return;
+
+    // Generate deadline: routine day of current month + daysUntilDeadline
+    const deadlineDate = new Date(now.getFullYear(), now.getMonth(), day + (routine.daysUntilDeadline || 7));
+    const deadline = `${deadlineDate.getFullYear()}-${String(deadlineDate.getMonth()+1).padStart(2,'0')}-${String(deadlineDate.getDate()).padStart(2,'0')}`;
+
+    const newTask = {
+      id: uid(),
+      title: routine.title,
+      desc: routine.desc || '',
+      status: 'todo',
+      priority: routine.priority || 'medium',
+      assignees: routine.assignees || [],
+      deadline: deadline,
+      created: Date.now(),
+      routineId: routine.id,
+      routineMonth: yearMonth
+    };
+    newTasks.push(newTask);
+    created = true;
+  });
+
+  if(created) {
+    saveTasks(newTasks);
+  }
+}
+
+function saveRoutines(routines) {
+  if(db) { const obj={}; routines.forEach(r=>obj[r.id]=r); db.ref('routines').set(obj); }
+}
 
 function initFirebase(config) {
   try {
@@ -221,10 +276,17 @@ function initFirebase(config) {
       if(data) { setState({members:Object.values(data)}); }
       else { const obj={}; DEFAULT_MEMBERS.forEach(m=>obj[m.id]=m); db.ref('members').set(obj); }
     });
+    db.ref('routines').on('value', snap => {
+      const data = snap.val();
+      if(data) { setState({routines:Object.values(data)}); }
+      else { setState({routines:[]}); }
+    });
     db.ref('tasks').on('value', snap => {
       const data = snap.val();
       if(data) { setState({tasks:Object.values(data),loading:false,screen:'app',lastSync:Date.now(),syncing:false}); }
       else { const s=sampleTasks(state.members); const obj={}; s.forEach(t=>obj[t.id]=t); db.ref('tasks').set(obj); setState({tasks:s,loading:false,screen:'app',lastSync:Date.now()}); }
+      // Auto-generate routine tasks after data loads
+      setTimeout(()=>checkAndGenerateRoutines(), 500);
     });
     return true;
   } catch(e) { console.error('Firebase error:',e); return false; }
@@ -311,6 +373,8 @@ function renderList(tasks){
 function renderModal(){
   if(!state.modal)return null;
   if(state.modal.mode==='members')return renderMemberModal();
+  if(state.modal.mode==='routines')return renderRoutineListModal();
+  if(state.modal.mode==='routine-edit')return renderRoutineEditModal();
 
   const isEdit=state.modal.mode==='edit';
   const task=isEdit?state.modal.task:{title:'',desc:'',status:'todo',priority:'medium',assignees:[],deadline:''};
@@ -411,6 +475,109 @@ function renderMemberModal(){
   actions.appendChild(right);modal.appendChild(actions);overlay.appendChild(modal);return overlay;
 }
 
+function renderRoutineListModal(){
+  const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:null})});
+  const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
+  modal.appendChild(h('h2',null,'ルーティンタスク管理'));
+  modal.appendChild(h('p',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'16px'}},'毎月指定した日に自動的にタスクが作成されます。ページを開いたときに今月分が自動チェックされます。'));
+
+  if(state.routines.length===0){
+    modal.appendChild(h('div',{style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:'13px'}},'ルーティンタスクはまだありません'));
+  } else {
+    state.routines.forEach(r=>{
+      const assigneeNames = (r.assignees||[]).map(id=>state.members.find(m=>m.id===id)?.name||'?').join(', ');
+      const item=h('div',{className:'routine-item'},
+        h('div',{className:'routine-info'},
+          h('div',{className:'routine-title'},r.title),
+          h('div',{className:'routine-meta'},`毎月${r.dayOfMonth}日 / ${PRIORITY_MAP[r.priority]?.label||'中'}優先 / 期限: ${r.daysUntilDeadline||7}日後${assigneeNames?' / '+assigneeNames:''}`)
+        ),
+        h('div',{className:'routine-actions'},
+          h('button',{style:{padding:'3px 8px',fontSize:'11px'},onClick:()=>setState({modal:{mode:'routine-edit',routine:r}})},'編集'),
+          h('button',{className:'danger',style:{padding:'3px 8px',fontSize:'11px'},onClick:()=>{
+            saveRoutines(state.routines.filter(rr=>rr.id!==r.id));
+            setTimeout(()=>setState({modal:{mode:'routines'}}),100);
+          }},'削除')
+        )
+      );
+      modal.appendChild(item);
+    });
+  }
+
+  modal.appendChild(h('button',{style:{width:'100%',marginTop:'8px'},onClick:()=>setState({modal:{mode:'routine-edit',routine:null}})},'+ ルーティンを追加'));
+
+  const actions=h('div',{className:'form-actions'});
+  actions.appendChild(h('div'));
+  actions.appendChild(h('button',{onClick:()=>setState({modal:null})},'閉じる'));
+  modal.appendChild(actions);
+  overlay.appendChild(modal);return overlay;
+}
+
+function renderRoutineEditModal(){
+  const isEdit = !!state.modal.routine;
+  const routine = state.modal.routine || {title:'',desc:'',dayOfMonth:1,priority:'medium',assignees:[],daysUntilDeadline:7};
+  const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:{mode:'routines'}})});
+  const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
+  modal.appendChild(h('h2',null,isEdit?'ルーティン編集':'ルーティン追加'));
+
+  const titleInput=h('input',{value:routine.title,placeholder:'タスク名（例: 月次レポート提出）'});
+  const descInput=h('textarea',{rows:'2',placeholder:'詳細（任意）'});descInput.value=routine.desc||'';
+  const dayInput=h('input',{type:'number',value:String(routine.dayOfMonth||1),min:'1',max:'28',style:{width:'100%'}});
+  const deadlineDaysInput=h('input',{type:'number',value:String(routine.daysUntilDeadline||7),min:'1',max:'30',style:{width:'100%'}});
+  const prioSel=h('select');Object.entries(PRIORITY_MAP).forEach(([k,v])=>{const o=h('option',{value:k},v.label);if(k===routine.priority)o.selected=true;prioSel.appendChild(o);});
+
+  const selectedAssignees = new Set(routine.assignees||[]);
+  const assigneeContainer = h('div',{className:'assignee-grid'});
+  state.members.forEach(m => {
+    const isSel = selectedAssignees.has(m.id);
+    const option = h('div',{className:`assignee-option ${isSel?'selected':''}`,onClick:()=>{
+      if(selectedAssignees.has(m.id)) selectedAssignees.delete(m.id);
+      else selectedAssignees.add(m.id);
+      option.classList.toggle('selected');
+      option.querySelector('.assignee-check').textContent = selectedAssignees.has(m.id) ? '✓' : '';
+    }},
+      h('div',{className:'assignee-check'},isSel?'✓':''),
+      avatarEl(m,24),
+      h('span',{style:{fontSize:'13px'}},m.name)
+    );
+    assigneeContainer.appendChild(option);
+  });
+
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'タスク名'),titleInput));
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'説明'),descInput));
+  modal.appendChild(h('div',{className:'form-row'},
+    h('div',{className:'form-group'},h('label',null,'毎月の作成日（1〜28日）'),dayInput),
+    h('div',{className:'form-group'},h('label',null,'期限（作成日から何日後）'),deadlineDaysInput)
+  ));
+  modal.appendChild(h('div',{className:'form-row'},
+    h('div',{className:'form-group'},h('label',null,'優先度'),prioSel),
+    h('div',{className:'form-group'},h('label',null,'担当者'),assigneeContainer)
+  ));
+
+  const actions=h('div',{className:'form-actions'});
+  actions.appendChild(h('div'));
+  const right=h('div',{className:'form-actions-right'});
+  right.appendChild(h('button',{onClick:()=>setState({modal:{mode:'routines'}})},'戻る'));
+  right.appendChild(h('button',{className:'primary',onClick:()=>{
+    if(!titleInput.value.trim())return;
+    const data={
+      id: isEdit ? routine.id : 'r'+uid(),
+      title: titleInput.value.trim(),
+      desc: descInput.value,
+      dayOfMonth: Math.max(1,Math.min(28,parseInt(dayInput.value)||1)),
+      daysUntilDeadline: Math.max(1,Math.min(30,parseInt(deadlineDaysInput.value)||7)),
+      priority: prioSel.value,
+      assignees: Array.from(selectedAssignees)
+    };
+    const newRoutines = isEdit ? state.routines.map(r=>r.id===routine.id?data:r) : [...state.routines, data];
+    saveRoutines(newRoutines);
+    setState({modal:{mode:'routines'}});
+  }},'保存'));
+  actions.appendChild(right);modal.appendChild(actions);
+  overlay.appendChild(modal);
+  setTimeout(()=>titleInput.focus(),50);
+  return overlay;
+}
+
 function renderSetup(){
   const el=h('div',{className:'setup-screen'});
   el.appendChild(h('h1',null,'タスクボード セットアップ'));
@@ -492,6 +659,26 @@ function render(){
       avatarEl(m,28),h('div',null,h('div',{className:'member-name'},m.name),h('div',{className:'member-count'},`${c}件 進行中`))));
   });
   ms2.appendChild(mg);container.appendChild(ms2);
+
+  // Routine section
+  const rs=h('div',{className:'routine-section'});
+  const rt=h('div',{className:'section-title'});
+  rt.appendChild(document.createTextNode('ルーティンタスク'));
+  rt.appendChild(h('button',{style:{fontSize:'11px',padding:'3px 10px'},onClick:()=>setState({modal:{mode:'routines'}})},'管理'));
+  rs.appendChild(rt);
+  if(state.routines.length===0){
+    rs.appendChild(h('div',{style:{fontSize:'12px',color:'var(--text-tertiary)'}},'ルーティンタスクを登録すると、毎月自動でタスクが作成されます。'));
+  } else {
+    state.routines.forEach(r=>{
+      const assigneeNames = (r.assignees||[]).map(id=>state.members.find(m=>m.id===id)?.name||'?').join(', ');
+      rs.appendChild(h('div',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'4px',display:'flex',alignItems:'center',gap:'6px'}},
+        h('span',{className:'routine-badge'},`毎月${r.dayOfMonth}日`),
+        h('span',null,r.title),
+        assigneeNames?h('span',{style:{fontSize:'11px',color:'var(--text-tertiary)'}},' — '+assigneeNames):null
+      ));
+    });
+  }
+  container.appendChild(rs);
 
   container.appendChild(h('div',{className:'info-bar'},'リアルタイム共有モード: Firebaseでチームメンバーと自動同期中です。タスクやメンバー名の変更は即座に全員に反映されます。'));
   app.appendChild(container);

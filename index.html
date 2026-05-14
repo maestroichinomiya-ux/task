@@ -221,41 +221,86 @@ function isDoneHidden(task) {
 let state = {tasks:[],members:DEFAULT_MEMBERS,routines:[],view:'kanban',filterMember:'',search:'',sortBy:'status',showDone:true,modal:null,syncing:false,lastSync:null,loading:true,screen:'loading'};
 function setState(patch) { Object.assign(state,patch); render(); }
 
-// Routine auto-generation: check if this month's tasks have been created
+// Routine auto-generation: supports monthly and weekly
+const WEEKDAY_NAMES = ['日','月','火','水','木','金','土'];
+
+function getLastDayOfMonth(year, month) {
+  return new Date(year, month + 1, 0).getDate();
+}
+
+function formatRoutineSchedule(r) {
+  if(r.type === 'weekly') {
+    return `毎週${WEEKDAY_NAMES[r.dayOfWeek||1]}曜日`;
+  }
+  return `毎月${r.dayOfMonth||1}日`;
+}
+
 function checkAndGenerateRoutines() {
   if(!db || state.routines.length===0) return;
   const now = new Date();
-  const yearMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   let newTasks = [...state.tasks];
   let created = false;
 
   state.routines.forEach(routine => {
-    // Check if a task from this routine already exists for this month
-    const alreadyExists = newTasks.some(t => t.routineId === routine.id && t.routineMonth === yearMonth);
-    if(alreadyExists) return;
+    if(routine.type === 'weekly') {
+      // Weekly: check if today matches the day of week and no task exists for this week
+      const todayDow = now.getDay(); // 0=Sun
+      const routineDow = routine.dayOfWeek != null ? routine.dayOfWeek : 1; // default Mon
+      if(todayDow !== routineDow) return;
 
-    // Check if today >= the routine's day of month
-    const day = routine.dayOfMonth || 1;
-    if(now.getDate() < day) return;
+      // Use ISO week key: year-Wxx
+      const jan1 = new Date(now.getFullYear(), 0, 1);
+      const weekNum = Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+      const weekKey = `${now.getFullYear()}-W${String(weekNum).padStart(2,'0')}`;
 
-    // Generate deadline: routine day of current month + daysUntilDeadline
-    const deadlineDate = new Date(now.getFullYear(), now.getMonth(), day + (routine.daysUntilDeadline || 7));
-    const deadline = `${deadlineDate.getFullYear()}-${String(deadlineDate.getMonth()+1).padStart(2,'0')}-${String(deadlineDate.getDate()).padStart(2,'0')}`;
+      const alreadyExists = newTasks.some(t => t.routineId === routine.id && t.routineWeek === weekKey);
+      if(alreadyExists) return;
 
-    const newTask = {
-      id: uid(),
-      title: routine.title,
-      desc: routine.desc || '',
-      status: 'todo',
-      priority: routine.priority || 'medium',
-      assignees: routine.assignees || [],
-      deadline: deadline,
-      created: Date.now(),
-      routineId: routine.id,
-      routineMonth: yearMonth
-    };
-    newTasks.push(newTask);
-    created = true;
+      const deadlineDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (routine.daysUntilDeadline || 7));
+      const deadline = `${deadlineDate.getFullYear()}-${String(deadlineDate.getMonth()+1).padStart(2,'0')}-${String(deadlineDate.getDate()).padStart(2,'0')}`;
+
+      newTasks.push({
+        id: uid(),
+        title: routine.title,
+        desc: routine.desc || '',
+        status: 'todo',
+        priority: routine.priority || 'medium',
+        assignees: routine.assignees || [],
+        deadline: deadline,
+        created: Date.now(),
+        routineId: routine.id,
+        routineWeek: weekKey
+      });
+      created = true;
+
+    } else {
+      // Monthly (default)
+      const yearMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      const alreadyExists = newTasks.some(t => t.routineId === routine.id && t.routineMonth === yearMonth);
+      if(alreadyExists) return;
+
+      // Adjust day to last day of month if needed
+      const lastDay = getLastDayOfMonth(now.getFullYear(), now.getMonth());
+      const day = Math.min(routine.dayOfMonth || 1, lastDay);
+      if(now.getDate() < day) return;
+
+      const deadlineDate = new Date(now.getFullYear(), now.getMonth(), day + (routine.daysUntilDeadline || 7));
+      const deadline = `${deadlineDate.getFullYear()}-${String(deadlineDate.getMonth()+1).padStart(2,'0')}-${String(deadlineDate.getDate()).padStart(2,'0')}`;
+
+      newTasks.push({
+        id: uid(),
+        title: routine.title,
+        desc: routine.desc || '',
+        status: 'todo',
+        priority: routine.priority || 'medium',
+        assignees: routine.assignees || [],
+        deadline: deadline,
+        created: Date.now(),
+        routineId: routine.id,
+        routineMonth: yearMonth
+      });
+      created = true;
+    }
   });
 
   if(created) {
@@ -479,17 +524,18 @@ function renderRoutineListModal(){
   const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:null})});
   const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
   modal.appendChild(h('h2',null,'ルーティンタスク管理'));
-  modal.appendChild(h('p',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'16px'}},'毎月指定した日に自動的にタスクが作成されます。ページを開いたときに今月分が自動チェックされます。'));
+  modal.appendChild(h('p',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'16px'}},'毎月または毎週、自動的にタスクが作成されます。ページを開いたときに自動チェックされます。'));
 
   if(state.routines.length===0){
     modal.appendChild(h('div',{style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:'13px'}},'ルーティンタスクはまだありません'));
   } else {
     state.routines.forEach(r=>{
       const assigneeNames = (r.assignees||[]).map(id=>state.members.find(m=>m.id===id)?.name||'?').join(', ');
+      const schedule = formatRoutineSchedule(r);
       const item=h('div',{className:'routine-item'},
         h('div',{className:'routine-info'},
           h('div',{className:'routine-title'},r.title),
-          h('div',{className:'routine-meta'},`毎月${r.dayOfMonth}日 / ${PRIORITY_MAP[r.priority]?.label||'中'}優先 / 期限: ${r.daysUntilDeadline||7}日後${assigneeNames?' / '+assigneeNames:''}`)
+          h('div',{className:'routine-meta'},`${schedule} / ${PRIORITY_MAP[r.priority]?.label||'中'}優先 / 期限: ${r.daysUntilDeadline||7}日後${assigneeNames?' / '+assigneeNames:''}`)
         ),
         h('div',{className:'routine-actions'},
           h('button',{style:{padding:'3px 8px',fontSize:'11px'},onClick:()=>setState({modal:{mode:'routine-edit',routine:r}})},'編集'),
@@ -514,14 +560,53 @@ function renderRoutineListModal(){
 
 function renderRoutineEditModal(){
   const isEdit = !!state.modal.routine;
-  const routine = state.modal.routine || {title:'',desc:'',dayOfMonth:1,priority:'medium',assignees:[],daysUntilDeadline:7};
+  const routine = state.modal.routine || {title:'',desc:'',type:'monthly',dayOfMonth:1,dayOfWeek:1,priority:'medium',assignees:[],daysUntilDeadline:7};
   const overlay=h('div',{className:'modal-overlay',onClick:()=>setState({modal:{mode:'routines'}})});
   const modal=h('div',{className:'modal',onClick:e=>e.stopPropagation()});
   modal.appendChild(h('h2',null,isEdit?'ルーティン編集':'ルーティン追加'));
 
   const titleInput=h('input',{value:routine.title,placeholder:'タスク名（例: 月次レポート提出）'});
   const descInput=h('textarea',{rows:'2',placeholder:'詳細（任意）'});descInput.value=routine.desc||'';
-  const dayInput=h('input',{type:'number',value:String(routine.dayOfMonth||1),min:'1',max:'28',style:{width:'100%'}});
+
+  // Type toggle: monthly or weekly
+  let currentType = routine.type || 'monthly';
+  const typeRow = h('div',{style:{display:'flex',gap:'4px',marginBottom:'12px'}});
+  const monthlyBtn = h('button',{className:currentType==='monthly'?'view-btn active':'view-btn',style:{fontSize:'12px',padding:'5px 14px'},onClick:()=>{
+    currentType='monthly';
+    monthlyBtn.className='view-btn active';
+    weeklyBtn.className='view-btn';
+    scheduleMonthly.style.display='';
+    scheduleWeekly.style.display='none';
+  }},'毎月');
+  const weeklyBtn = h('button',{className:currentType==='weekly'?'view-btn active':'view-btn',style:{fontSize:'12px',padding:'5px 14px'},onClick:()=>{
+    currentType='weekly';
+    weeklyBtn.className='view-btn active';
+    monthlyBtn.className='view-btn';
+    scheduleMonthly.style.display='none';
+    scheduleWeekly.style.display='';
+  }},'毎週');
+  typeRow.appendChild(monthlyBtn);
+  typeRow.appendChild(weeklyBtn);
+
+  // Monthly: day of month (1-31)
+  const dayInput=h('input',{type:'number',value:String(routine.dayOfMonth||1),min:'1',max:'31',style:{width:'100%'}});
+  const scheduleMonthly = h('div',{className:'form-group',style:{display:currentType==='monthly'?'':'none'}},
+    h('label',null,'作成日（1〜31日）※月末を超える場合はその月の最終日に自動調整'),
+    dayInput
+  );
+
+  // Weekly: day of week
+  const dowSel = h('select',{style:{width:'100%'}});
+  WEEKDAY_NAMES.forEach((name,i)=>{
+    const o=h('option',{value:String(i)},`${name}曜日`);
+    if(i===(routine.dayOfWeek!=null?routine.dayOfWeek:1))o.selected=true;
+    dowSel.appendChild(o);
+  });
+  const scheduleWeekly = h('div',{className:'form-group',style:{display:currentType==='weekly'?'':'none'}},
+    h('label',null,'曜日'),
+    dowSel
+  );
+
   const deadlineDaysInput=h('input',{type:'number',value:String(routine.daysUntilDeadline||7),min:'1',max:'30',style:{width:'100%'}});
   const prioSel=h('select');Object.entries(PRIORITY_MAP).forEach(([k,v])=>{const o=h('option',{value:k},v.label);if(k===routine.priority)o.selected=true;prioSel.appendChild(o);});
 
@@ -544,14 +629,14 @@ function renderRoutineEditModal(){
 
   modal.appendChild(h('div',{className:'form-group'},h('label',null,'タスク名'),titleInput));
   modal.appendChild(h('div',{className:'form-group'},h('label',null,'説明'),descInput));
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'繰り返しタイプ'),typeRow));
+  modal.appendChild(scheduleMonthly);
+  modal.appendChild(scheduleWeekly);
   modal.appendChild(h('div',{className:'form-row'},
-    h('div',{className:'form-group'},h('label',null,'毎月の作成日（1〜28日）'),dayInput),
-    h('div',{className:'form-group'},h('label',null,'期限（作成日から何日後）'),deadlineDaysInput)
+    h('div',{className:'form-group'},h('label',null,'期限（作成日から何日後）'),deadlineDaysInput),
+    h('div',{className:'form-group'},h('label',null,'優先度'),prioSel)
   ));
-  modal.appendChild(h('div',{className:'form-row'},
-    h('div',{className:'form-group'},h('label',null,'優先度'),prioSel),
-    h('div',{className:'form-group'},h('label',null,'担当者'),assigneeContainer)
-  ));
+  modal.appendChild(h('div',{className:'form-group'},h('label',null,'担当者'),assigneeContainer));
 
   const actions=h('div',{className:'form-actions'});
   actions.appendChild(h('div'));
@@ -563,7 +648,9 @@ function renderRoutineEditModal(){
       id: isEdit ? routine.id : 'r'+uid(),
       title: titleInput.value.trim(),
       desc: descInput.value,
-      dayOfMonth: Math.max(1,Math.min(28,parseInt(dayInput.value)||1)),
+      type: currentType,
+      dayOfMonth: currentType==='monthly' ? Math.max(1,Math.min(31,parseInt(dayInput.value)||1)) : (routine.dayOfMonth||1),
+      dayOfWeek: currentType==='weekly' ? parseInt(dowSel.value) : (routine.dayOfWeek!=null?routine.dayOfWeek:1),
       daysUntilDeadline: Math.max(1,Math.min(30,parseInt(deadlineDaysInput.value)||7)),
       priority: prioSel.value,
       assignees: Array.from(selectedAssignees)
@@ -667,12 +754,13 @@ function render(){
   rt.appendChild(h('button',{style:{fontSize:'11px',padding:'3px 10px'},onClick:()=>setState({modal:{mode:'routines'}})},'管理'));
   rs.appendChild(rt);
   if(state.routines.length===0){
-    rs.appendChild(h('div',{style:{fontSize:'12px',color:'var(--text-tertiary)'}},'ルーティンタスクを登録すると、毎月自動でタスクが作成されます。'));
+    rs.appendChild(h('div',{style:{fontSize:'12px',color:'var(--text-tertiary)'}},'ルーティンタスクを登録すると、毎月・毎週自動でタスクが作成されます。'));
   } else {
     state.routines.forEach(r=>{
       const assigneeNames = (r.assignees||[]).map(id=>state.members.find(m=>m.id===id)?.name||'?').join(', ');
+      const schedule = formatRoutineSchedule(r);
       rs.appendChild(h('div',{style:{fontSize:'13px',color:'var(--text-secondary)',marginBottom:'4px',display:'flex',alignItems:'center',gap:'6px'}},
-        h('span',{className:'routine-badge'},`毎月${r.dayOfMonth}日`),
+        h('span',{className:'routine-badge'},schedule),
         h('span',null,r.title),
         assigneeNames?h('span',{style:{fontSize:'11px',color:'var(--text-tertiary)'}},' — '+assigneeNames):null
       ));
